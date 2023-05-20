@@ -1,3 +1,4 @@
+import datetime
 import os
 import customtkinter as ctk
 import threading
@@ -7,9 +8,14 @@ import shutil
 import socket
 import time
 import tarfile
-#  import hashlib
-#  import base64
-import tempfile
+import json
+import hashlib
+
+
+
+def save_to_json(json_name, json_string):
+    with open(json_name, "w") as file:
+        file.write(json_string)
 
 
 class FileManager(ctk.CTkToplevel):
@@ -21,7 +27,8 @@ class FileManager(ctk.CTkToplevel):
         self.geometry("950x600")
         self.nome_usuario = "nome usuario"
         self.users = {}
-
+        #garante que todos os arquivos tenham om json, criando para os que nao tem
+        self.check_all_files_have_json()
         self.file_list = FileList(self, self.path)
         self.user_list = UserList(self, self.users)
 
@@ -76,8 +83,49 @@ class FileManager(ctk.CTkToplevel):
             self.file_list.add_file(file_path)
             file_name = os.path.basename(file_path)
             self.file_list.files_checkbox.add_item(file_name)
+            self.make_json(file_path)
+
         except FileNotFoundError:
             print("no file uploaded")
+
+    def check_all_files_have_json(self):
+        files = os.listdir(self.path)
+
+        for file in files:
+            file_path = os.path.join(self.path, file)
+            if file_path.endswith(".json") or os.path.isdir(file_path):
+                continue
+
+            json_file = file.split(".")[0] + ".json"
+            if json_file not in files:
+                self.make_json(file_path)
+
+
+    def make_json(self, file_path):
+        #gera os meta dados do arquivo (data de criacao e ultima vez que foi editado, alem do hash)
+        creation_date = datetime.datetime.fromtimestamp(os.path.getctime(file_path)).strftime("%Y-%m-%d %H:%M:%S")
+        print(creation_date)
+        last_edited = datetime.datetime.fromtimestamp(os.path.getmtime(file_path)).strftime("%Y-%m-%d %H:%M:%S")
+        print(last_edited)
+        hash_hex = self.get_hash(file_path)
+
+        meta_data = {"file_name": os.path.basename(file_path),
+                     "creation_date": creation_date,
+                     "last_edited": last_edited,
+                     "hash": [hash_hex]}
+        # converte dados para json
+        json_string = json.dumps(meta_data, indent=4)
+        # pega o nome base do aruqivo ex:teste.txt e devolve sem a extensao "teste" -> teste.json
+        # ainda nao leva em conta 2 arquivos com o mesmo nome
+        json_name = os.path.basename(file_path).split(".")[0] + ".json"
+        json_path = os.path.join(self.path, json_name)
+        save_to_json(json_path, json_string)
+
+    def get_hash(self, file_path):
+        with open(file_path, "rb") as file:
+            file_content = file.read()
+            hash_obj = hashlib.sha1(file_content)
+            return hash_obj.hexdigest()
 
     def open_file(self):
         files_to_open = self.file_list.files_checkbox.get_checked_items()
@@ -105,7 +153,7 @@ class FileManager(ctk.CTkToplevel):
                         send_file(file, file_obj, ip, file_size)
 
                     else:
-                        #tentei usar isso pra mandar diretorio como arquivo, mas ainda n funciona
+                        # tentei usar isso pra mandar diretorio como arquivo, mas ainda n funciona
                         """
                         dir_name = file
                         temp_file = tempfile.NamedTemporaryFile(suffix=".tar")
@@ -160,7 +208,6 @@ class FileManager(ctk.CTkToplevel):
                 with tarfile.open(file_path, "r") as tar:
                     tar.extractall(path=dir_name)
 
-
             self.file_list.files_checkbox.add_item(file_name)
             client_socket.close()
 
@@ -176,8 +223,6 @@ class FileManager(ctk.CTkToplevel):
         else:
             # Se for um arquivo não temporário, abra e retorne o objeto
             return open(file_path, "rb")
-
-
 
 
 class UserList(ctk.CTkFrame):
@@ -196,6 +241,8 @@ class FileList(ctk.CTkFrame):
 
         self.path = path
         self.files = os.listdir(self.path)
+        #os arquivos json nao devem ser listados
+        self.files = [file for file in self.files if not file.endswith(".json")]
         print(self.files)
         self.files_checkbox = ScrollableFrameCheckbox(self, width=200, file_list=self.files)
         self.files_checkbox.grid(row=0, column=0, padx=15, pady=15, sticky="ns")
