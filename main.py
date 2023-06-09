@@ -1,8 +1,6 @@
 from os import path, makedirs
 import customtkinter as ctk
-from login import LoginFrame
 from file_manager import FileManager
-
 
 
 class DropBag(ctk.CTk):
@@ -13,10 +11,6 @@ class DropBag(ctk.CTk):
         self.geometry("500x350")
         self.title('Drop Bag')
         self.resizable(True, True)
-
-        self.frame_login = LoginFrame(master=self, on_successful_login=self.on_successful_login)
-
-    def on_successful_login(self):
         self.withdraw()
         self.check_main_path_exists()
         file_manager = FileManager(self.path, self)
@@ -26,6 +20,9 @@ class DropBag(ctk.CTk):
         self.path = path.join(self.path, dir_name)
         if not path.exists(self.path):
             makedirs(self.path)
+
+
+
 
 app = DropBag()
 app.mainloop()
