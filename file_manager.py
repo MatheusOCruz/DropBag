@@ -78,6 +78,7 @@ class FileManager(ctk.CTkToplevel):
         self.file_receiver_thread.start()
 
         self.auto_sync_thread = threading.Thread(target=self.auto_sync_folders)
+        self.auto_sync_thread.start()
 
     def listen_for_broadcasts(self):
         listen_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -142,6 +143,7 @@ class FileManager(ctk.CTkToplevel):
             print('le timeoute')
 
     def auto_sync_folders(self):
+        time.sleep(50)
         with open(os.path.join(self.path, "shared_folders.json"), 'r') as f:
             folders = json.load(f)
         for folder in folders:
