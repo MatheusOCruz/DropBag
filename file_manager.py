@@ -54,9 +54,11 @@ class FileManager(ctk.CTkToplevel):
         self.path = path
         self.old_paths = []
         self.geometry("950x600")
+
         self.nome_usuario = "desktop"
         self.users = {}
         self.shared_folders = {}
+
         # self.check_last_edited()
         self.file_list = FileList(self, self.path)
         self.user_list = UserList(self, self.users)
@@ -88,6 +90,7 @@ class FileManager(ctk.CTkToplevel):
     def listen_for_broadcasts(self):
         listen_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         listen_socket.bind(('0.0.0.0', 33966))
+
         try:
             while True:
                 mensagem = listen_socket.recvfrom(1024)
@@ -106,6 +109,8 @@ class FileManager(ctk.CTkToplevel):
                         json_path = os.path.join(self.path, folder_json)
                         json_size = os.path.getsize(json_path)
                         send_file(folder_json, json_path, ip, json_size, 63636)
+                        self.send_requested_files(folder, ip)
+
 
                 else:
                     user_name = data
@@ -115,6 +120,38 @@ class FileManager(ctk.CTkToplevel):
 
         except socket.timeout:
             print("timeout queridao")
+    def send_requested_files(self, folder, ip):
+        file_list_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        file_list_socket.bind(("0.0.0.0", 27727))
+        file_list_socket.listen(1)
+        file_list_socket.settimeout(10)
+        try:
+            file_soc, addr = file_list_socket.accept()
+            json_arquivos = file_soc.recv(4096).decode()
+            file_soc.close()
+            arquivos_desejados = json.loads(json_arquivos)
+
+            folder_path = os.path.join(self.path, folder)
+            temp_zip = f'{folder}_2.zip'
+            temp_zip_path = os.path.join(self.path, temp_zip)
+            with zipfile.ZipFile(temp_zip_path, 'w') as zipf:
+                for file in arquivos_desejados:
+                    file_path = os.path.join(folder_path, file)
+                    zipf.write(file_path, file)
+            file_path = os.path.join(self.path, temp_zip)
+            file_size = os.path.getsize(file_path)
+            send_file(temp_zip, file_path, ip, file_size, 27727)
+            os.remove(file_path)
+
+
+
+
+
+
+        except socket.timeout:
+            print('le timeoute')
+
+
 
     def sync_folders(self):
         folders_to_sync = self.file_list.files_checkbox.get_checked_items()
@@ -416,6 +453,7 @@ class FileManager(ctk.CTkToplevel):
                 is_zip = True
                 print('zip')
 
+                
             file_size = int(file_size)
             file_path = os.path.join(self.path, file_name)
 
