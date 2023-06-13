@@ -27,19 +27,22 @@ def send_file(file_name, file_path, ip, file_size, port):
     delimiter = b"\\0j0"
     buffer_size = 4096 - len(delimiter)
     send_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    send_socket.connect((ip, port))
-    send_socket.send(f'{file_name}{separator}{file_size}'.encode())
+    try:
+        send_socket.connect((ip, port))
+        send_socket.send(f'{file_name}{separator}{file_size}'.encode())
 
-    progress = tqdm.tqdm(range(file_size), f"Sending {file_name}", unit="B", unit_scale=True, unit_divisor=1024)
+        progress = tqdm.tqdm(range(file_size), f"Sending {file_name}", unit="B", unit_scale=True, unit_divisor=1024)
 
-    with open(file_path, "rb") as f:
-        chunk = f.read(buffer_size)
-        while chunk:
-            send_socket.sendall(chunk + delimiter)
-            progress.update(len(chunk))
+        with open(file_path, "rb") as f:
             chunk = f.read(buffer_size)
+            while chunk:
+                send_socket.sendall(chunk + delimiter)
+                progress.update(len(chunk))
+                chunk = f.read(buffer_size)
 
-    send_socket.close()
+        send_socket.close()
+    except:
+        return
 
 
 def get_ip_address():
