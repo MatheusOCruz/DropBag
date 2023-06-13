@@ -1,4 +1,4 @@
-import datetime
+from datetime import datetime
 import os
 import customtkinter as ctk
 import threading
@@ -9,6 +9,7 @@ import socket
 import json
 import hashlib
 import zipfile
+import filecmp
 
 
 def save_to_json(json_name, json_string):
@@ -25,6 +26,19 @@ def zip_dir(dir_path, output_path):
                 zipf.write(file_path, arcname)
 
 
+def compare_folders(current_folder_path, new_folder_path):
+    new_files = os.listdir(new_folder_path)
+    for file in new_files:
+        file_path = os.path.join(new_folder_path, file)
+        if not os.path.exists(os.path.join(current_folder_path, file)):
+            shutil.copy2(file_path, current_folder_path)
+        elif filecmp.cmp(file_path, os.path.join(current_folder_path, file)) == False:
+            timestamp = datetime.fromtimestamp(os.path.getmtime(file_path)).strftime('%Y-%m-%d_%H-%M-%S')
+            shutil.copy2(file_path, os.path.join(current_folder_path, f"{os.path.splitext(file)[0]}_{timestamp}{os.path.splitext(file)[1]}"))
+
+
+
+
 def unzip_file(zip_path, output_dir):
     with zipfile.ZipFile(zip_path, 'r') as zipf:
         zipf.extractall(output_dir)
@@ -35,17 +49,18 @@ class FileManager(ctk.CTkToplevel):
         super().__init__(master)
         self.wm_transient(master)
         ctk.set_appearance_mode("system")
+        self.ip = get_ip_address()
         self.title = "Dropbag"
         self.path = path
         self.old_paths = []
         self.geometry("950x600")
-        self.nome_usuario = "nome usuario"
+        self.nome_usuario = "desktop"
         self.users = {}
-
+        self.shared_folders = {}
         # self.check_last_edited()
         self.file_list = FileList(self, self.path)
         self.user_list = UserList(self, self.users)
-
+        self.check_folders_have_json()
         self.upload_button = ctk.CTkButton(self, text="upload file", command=self.upload_file)
         self.upload_button.pack(side="left", padx=5, pady=5)
 
@@ -58,8 +73,8 @@ class FileManager(ctk.CTkToplevel):
         self.share_folder_button = ctk.CTkButton(self, text="share folder", command=self.share_folders)
         self.share_folder_button.pack(side="left", padx=5, pady=5)
 
-        self.sync_file_button = ctk.CTkButton(self, text="sync files", command=self.sync_folders)
-        self.sync_file_button.pack(side="left", padx=5, pady=5)
+        self.sync_folders_button = ctk.CTkButton(self, text="sync folders", command=self.sync_folders)
+        self.sync_folders_button.pack(side="left", padx=5, pady=5)
 
         self.broadcast_thread = threading.Thread(target=broadcast_myself, args=(self.nome_usuario,))
         self.broadcast_thread.start()
@@ -73,14 +88,13 @@ class FileManager(ctk.CTkToplevel):
     def listen_for_broadcasts(self):
         listen_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         listen_socket.bind(('0.0.0.0', 33966))
-        listen_socket.settimeout(100)
-
         try:
             while True:
                 mensagem = listen_socket.recvfrom(1024)
-
                 data, (ip, porta) = mensagem[0], mensagem[1]
                 data = data.decode()
+                if ip == self.ip:
+                    continue
                 if data.startswith("<FOLDER_REQUEST>"):
                     data = data[data.find(">") + 1:]
                     folder, chave = data.split(",")
@@ -93,14 +107,11 @@ class FileManager(ctk.CTkToplevel):
                         json_size = os.path.getsize(json_path)
                         send_file(folder_json, json_path, ip, json_size, 63636)
 
-
                 else:
                     user_name = data
                     if user_name not in self.users.keys():
                         self.users[user_name] = ip
                         self.user_list.users_radiobutton.add_item(user_name)
-                        #
-
 
         except socket.timeout:
             print("timeout queridao")
@@ -113,8 +124,10 @@ class FileManager(ctk.CTkToplevel):
             if os.path.isfile(folder_path):
                 continue
             self.sync_folder(folder)
+            time.sleep(2)
 
     def sync_folder(self, folder):
+        print(folder)
         ask_has_folder_thread = threading.Thread(target=ask_has_folder, args=(folder,))
         ask_has_folder_thread.start()
 
@@ -129,11 +142,11 @@ class FileManager(ctk.CTkToplevel):
 
         try:
             client_socket, addr = get_json_socket.accept()
-
+            folder_owner_ip = addr[0]
             received = client_socket.recv(buffer_size).decode()
 
             file_name, file_size = received.split(SEPARATOR)
-            file_name = "dir1_teste.json"
+            file_name = "dir1_2.json"
 
             file_size = int(file_size)
 
@@ -151,11 +164,80 @@ class FileManager(ctk.CTkToplevel):
                         progress.update(len(bytes_read))
                         bytes_read = client_socket.recv(buffer_size)
             client_socket.close()
+            get_json_socket.close()
+            current_json = os.path.join(self.path, f'{folder}.json')
+            self.compare_jsons(current_json, file_path, folder_owner_ip, folder)
 
-
-        except(socket.timeout):
+        except socket.timeout:
             print('timeout chefe')
 
+    def compare_jsons(self, current, new, folder_owner_ip, folder):
+        with open(current, 'r') as f:
+            current_data = json.load(f)
+        with open(new, 'r') as f:
+            new_data = json.load(f)
+        files_to_request = []
+        for k, v in new_data.items():
+            if k not in current_data:
+                files_to_request.append(k)
+                continue
+
+            new_date = datetime.strptime(new_data[k]["last_edited"], "%Y-%m-%d %H:%M:%S")
+            current_date = datetime.strptime(current_data[k]["last_edited"], "%Y-%m-%d %H:%M:%S")
+            print(new_date, current_date)
+            if new_date > current_date and new_data[k]['hash'] == current_data[k]['hash']:
+                files_to_request.append(k)
+        os.remove(new)
+        print(files_to_request)
+        if files_to_request:
+            SEPARATOR = "<SEPARATOR>"
+            delimiter = b"\\0j0"
+            buffer_size = 4096
+            json_files = json.dumps(files_to_request)
+            files_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            files_socket.connect((folder_owner_ip, 27727))
+            files_socket.sendall(json_files.encode())
+            files_socket.close()
+            recv_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            recv_socket.bind(('0.0.0.0', 27727))
+            recv_socket.listen(1)
+            try:
+                receive_soq, addr = recv_socket.accept()
+                received = receive_soq.recv(buffer_size).decode()
+                file_name, file_size = received.split(SEPARATOR)
+                print(file_name)
+                file_size = int(file_size)
+
+                file_path = os.path.join(self.path, file_name)
+
+                progress = tqdm.tqdm(range(file_size), f"receiving {file_path}", unit="B", unit_scale=True,
+                                     unit_divisor=1024)
+
+                with open(file_path, "wb") as file:
+                    bytes_read = receive_soq.recv(buffer_size)
+                    while bytes_read:
+                        if bytes_read.find(delimiter) != -1:
+                            bytes_read = bytes_read[:bytes_read.find(delimiter)]
+                            file.write(bytes_read)
+                            progress.update(len(bytes_read))
+                            bytes_read = receive_soq.recv(buffer_size)
+                    receive_soq.close()
+                    recv_socket.close()
+                    file.close()
+                    dir_name = file_name[:-4]
+                    dir_path = os.path.join(self.path, dir_name)
+                    os.makedirs(dir_path)
+                    print(file_path)
+                    unzip_file(zip_path=file_path, output_dir=dir_path)
+                    os.remove(file_path)
+                    current_folder_path = os.path.join(self.path, folder)
+                    compare_folders(current_folder_path, dir_path)
+
+
+                    ## os.remove(dir_path) ainda n da pra remover (da acesso negado)
+
+            except socket.timeout:
+                print('timeout pra variar')
 
     def check_last_edited(self):
         files = os.listdir(self.path)
@@ -169,7 +251,7 @@ class FileManager(ctk.CTkToplevel):
             file_json = os.path.join(self.path, file_json)
             with open(file_json) as f:
                 json_data = json.load(f)
-            last_edited = datetime.datetime.fromtimestamp(os.path.getmtime(file_path)).strftime("%Y-%m-%d %H:%M:%S")
+            last_edited = datetime.fromtimestamp(os.path.getmtime(file_path)).strftime("%Y-%m-%d %H:%M:%S")
             if last_edited != json_data["last_edited"]:
                 json_data['last_edited'] = last_edited
 
@@ -187,7 +269,7 @@ class FileManager(ctk.CTkToplevel):
             self.file_list.add_file(file_path)
             file_name = os.path.basename(file_path)
             self.file_list.files_checkbox.add_item(file_name)
-            self.make_json(file_path)
+
 
         except FileNotFoundError:
             print("no file uploaded")
@@ -203,6 +285,13 @@ class FileManager(ctk.CTkToplevel):
             json_file = file.split(".")[0] + ".json"
             if json_file not in files:
                 self.make_json(file_path)
+
+    def check_folders_have_json(self):
+        files = os.listdir(self.path)
+        for file in files:
+            if os.path.isdir(os.path.join(self.path, file)):
+                if not f'{file}.json' in files:
+                    self.folder_json(os.path.join(self.path, file))
 
     def folder_json(self, folder_path):
         folder_info = {}
@@ -226,33 +315,15 @@ class FileManager(ctk.CTkToplevel):
         return folder_info
 
     def get_file_info(self, file_path):
-        creation_date = datetime.datetime.fromtimestamp(os.path.getctime(file_path)).strftime("%Y-%m-%d %H:%M:%S")
+        creation_date = datetime.fromtimestamp(os.path.getctime(file_path)).strftime("%Y-%m-%d %H:%M:%S")
         print(creation_date)
-        last_edited = datetime.datetime.fromtimestamp(os.path.getmtime(file_path)).strftime("%Y-%m-%d %H:%M:%S")
+        last_edited = datetime.fromtimestamp(os.path.getmtime(file_path)).strftime("%Y-%m-%d %H:%M:%S")
         print(last_edited)
         hash_hex = self.get_hash(file_path)
-        file_info = {"creation_date": creation_date, "last_edited": last_edited, "hash": hash_hex}
-        return file_info
-
-    def make_json(self, file_path):
-        # gera os meta dados do arquivo (data de criacao e ultima vez que foi editado, alem do hash)
-        creation_date = datetime.datetime.fromtimestamp(os.path.getctime(file_path)).strftime("%Y-%m-%d %H:%M:%S")
-        print(creation_date)
-        last_edited = datetime.datetime.fromtimestamp(os.path.getmtime(file_path)).strftime("%Y-%m-%d %H:%M:%S")
-        print(last_edited)
-        hash_hex = self.get_hash(file_path)
-
-        meta_data = {"file_name": os.path.basename(file_path),
-                     "creation_date": creation_date,
+        file_info = {"creation_date": creation_date,
                      "last_edited": last_edited,
-                     "hash": [hash_hex],
-                     "shared": False}
-
-        json_string = json.dumps(meta_data, indent=4)
-
-        json_name = os.path.basename(file_path).split(".")[0] + ".json"
-        json_path = os.path.join(self.path, json_name)
-        save_to_json(json_path, json_string)
+                     "hash": hash_hex}
+        return file_info
 
     def get_hash(self, file_path):
         with open(file_path, "rb") as file:
@@ -344,7 +415,7 @@ class FileManager(ctk.CTkToplevel):
             if file_name.endswith(".zip"):
                 is_zip = True
                 print('zip')
-                file_name = "teste.zip"
+
             file_size = int(file_size)
             file_path = os.path.join(self.path, file_name)
 
@@ -360,9 +431,8 @@ class FileManager(ctk.CTkToplevel):
                         progress.update(len(bytes_read))
                         bytes_read = client_socket.recv(buffer_size)
             client_socket.close()
-
             if is_zip:
-                dir_name = file_name[:-4] + "_dir"
+                dir_name = file_name[:-4]
                 dir_path = os.path.join(self.path, dir_name)
                 os.makedirs(dir_path)
                 unzip_file(zip_path=file_path, output_dir=dir_path)
@@ -370,7 +440,7 @@ class FileManager(ctk.CTkToplevel):
                 zip_file = os.path.join(self.path, file_name)
                 os.remove(zip_file)
             else:
-                self.file_list.files_checkbox.add_item("teste4.txt")
+                self.file_list.files_checkbox.add_item(file_name)
 
 
 class UserList(ctk.CTkFrame):
@@ -384,14 +454,13 @@ class UserList(ctk.CTkFrame):
 
 class FileList(ctk.CTkFrame):
     def __init__(self, master, path):
-        super().__init__(master)
+        super().__init__(master, width=400, height=200)
         self.pack(fill="both", expand=True)
-
         self.path = path
         self.files = os.listdir(self.path)
         # os arquivos json nao devem ser listados
         self.files = [file for file in self.files if not file.endswith(".json")]
-        self.files_checkbox = ScrollableFrameCheckbox(self, width=200, file_list=self.files)
+        self.files_checkbox = ScrollableFrameCheckbox(self, file_list=self.files)
         self.files_checkbox.grid(row=0, column=0, padx=15, pady=15, sticky="ns")
 
     def add_file(self, file_path):
@@ -403,13 +472,13 @@ class FileList(ctk.CTkFrame):
         self.path = new_path
         self.files = os.listdir(self.path)
         self.files = [file for file in self.files if not file.endswith(".json")]
-        self.files_checkbox = ScrollableFrameCheckbox(self, width=200, file_list=self.files)
+        self.files_checkbox = ScrollableFrameCheckbox(self, file_list=self.files)
         self.files_checkbox.grid(row=0, column=0, padx=15, pady=15, sticky="ns")
 
 
 class ScrollableFrameCheckbox(ctk.CTkScrollableFrame):
-    def __init__(self, master, file_list, **kwargs):
-        super().__init__(master, **kwargs)
+    def __init__(self, master, file_list):
+        super().__init__(master, width=600, height=200)
 
         self.checkbox_list = []
         for file in file_list:
@@ -425,7 +494,7 @@ class ScrollableFrameCheckbox(ctk.CTkScrollableFrame):
 
     def add_item(self, item):
         checkbox = ctk.CTkCheckBox(self, text=item)
-        checkbox.grid(row=len(self.checkbox_list), column=0, pady=(0, 10))
+        checkbox.grid(row=len(self.checkbox_list), column=0, pady=(0, 10), sticky=ctk.W)
 
         self.checkbox_list.append(checkbox)
 
