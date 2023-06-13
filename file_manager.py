@@ -25,20 +25,6 @@ def zip_dir(dir_path, output_path):
                 arcname = os.path.relpath(file_path, dir_path)
                 zipf.write(file_path, arcname)
 
-
-def compare_folders(current_folder_path, new_folder_path):
-    new_files = os.listdir(new_folder_path)
-    for file in new_files:
-        file_path = os.path.join(new_folder_path, file)
-        if not os.path.exists(os.path.join(current_folder_path, file)):
-            shutil.copy2(file_path, current_folder_path)
-        elif filecmp.cmp(file_path, os.path.join(current_folder_path, file)) == False:
-            timestamp = datetime.fromtimestamp(os.path.getmtime(file_path)).strftime('%Y-%m-%d_%H-%M-%S')
-            shutil.copy2(file_path, os.path.join(current_folder_path, f"{os.path.splitext(file)[0]}_{timestamp}{os.path.splitext(file)[1]}"))
-
-
-
-
 def unzip_file(zip_path, output_dir):
     with zipfile.ZipFile(zip_path, 'r') as zipf:
         zipf.extractall(output_dir)
@@ -55,14 +41,17 @@ class FileManager(ctk.CTkToplevel):
         self.old_paths = []
         self.geometry("950x600")
 
-        self.nome_usuario = "desktop"
+        self.nome_usuario = input("user_name:")
         self.users = {}
-        self.shared_folders = {}
+        self.shared_folders = []
+        self.load_shared_folders()
 
-        # self.check_last_edited()
+
         self.file_list = FileList(self, self.path)
         self.user_list = UserList(self, self.users)
-        self.check_folders_have_json()
+
+        self.update_folders_have_json()
+
         self.upload_button = ctk.CTkButton(self, text="upload file", command=self.upload_file)
         self.upload_button.pack(side="left", padx=5, pady=5)
 
@@ -120,6 +109,7 @@ class FileManager(ctk.CTkToplevel):
 
         except socket.timeout:
             print("timeout queridao")
+
     def send_requested_files(self, folder, ip):
         file_list_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         file_list_socket.bind(("0.0.0.0", 27727))
@@ -145,13 +135,16 @@ class FileManager(ctk.CTkToplevel):
 
 
 
-
-
-
         except socket.timeout:
             print('le timeoute')
 
-
+    def auto_sync_folders(self):
+        with open(os.path.join(self.path, "shared_folders.json"), 'r') as f:
+            folders = json.load(f)
+        for folder in folders:
+            self.sync_folder(folder)
+            time.sleep(5)
+        time.sleep(180)
 
     def sync_folders(self):
         folders_to_sync = self.file_list.files_checkbox.get_checked_items()
@@ -268,13 +261,41 @@ class FileManager(ctk.CTkToplevel):
                     unzip_file(zip_path=file_path, output_dir=dir_path)
                     os.remove(file_path)
                     current_folder_path = os.path.join(self.path, folder)
-                    compare_folders(current_folder_path, dir_path)
+                    print("chegou")
+                    self.compare_folders(current_folder_path, dir_path)
+                    print("passou")
+
 
 
                     ## os.remove(dir_path) ainda n da pra remover (da acesso negado)
 
             except socket.timeout:
                 print('timeout pra variar')
+
+    def compare_folders(self, current_folder_path, new_folder_path):
+        folder_json = os.path.join(self.path, f'{current_folder_path}.json')
+        with open(folder_json, 'r') as f:
+            data = json.load(f)
+        f.close()
+
+        new_files = os.listdir(new_folder_path)
+        for file in new_files:
+            file_path = os.path.join(new_folder_path, file)
+            if not os.path.exists(os.path.join(current_folder_path, file)):
+                shutil.copy2(file_path, current_folder_path)
+                file_data = self.get_file_info(file_path)
+                data[file] = file_data
+            elif filecmp.cmp(file_path, os.path.join(current_folder_path, file)) == False:
+                old_file_time = data[file]['last_edited'].replace(" ", "_").replace(":", "-")
+                print(file)
+                new_name = f'{file}_{old_file_time}'
+                old_file_path = os.path.join(current_folder_path, file)
+                os.rename(os.path.join(current_folder_path, file), os.path.join(current_folder_path, new_name))
+                print(file_path)
+                print(current_folder_path)
+                shutil.copy2(file_path, current_folder_path)
+        shutil.rmtree(new_folder_path)
+
 
     def check_last_edited(self):
         files = os.listdir(self.path)
@@ -323,26 +344,46 @@ class FileManager(ctk.CTkToplevel):
             if json_file not in files:
                 self.make_json(file_path)
 
-    def check_folders_have_json(self):
+    def update_folders_have_json(self):
         files = os.listdir(self.path)
         for file in files:
             if os.path.isdir(os.path.join(self.path, file)):
-                if not f'{file}.json' in files:
-                    self.folder_json(os.path.join(self.path, file))
+                self.folder_json(os.path.join(self.path, file))
 
     def folder_json(self, folder_path):
-        folder_info = {}
         files = os.listdir(folder_path)
-        for file in files:
-            if file.endswith(".json"):
-                continue
-            file_path = os.path.join(folder_path, file)
+        folder = os.path.basename(folder_path)
+        json_path = os.path.join(self.path, f'{folder}.json')
+        if os.path.exists(json_path):
+            with open(json_path, 'r') as f:
+                folder_info = json.load(f)
+            for file in files:
+                print(file)
+                if file.endswith(".json"):
+                    continue
+                file_path = os.path.join(folder_path, file)
+                if os.path.isdir(file_path):
+                    pass
+                    #n vamos considerar folder com folders ent n vou usar
+                else:
+                    try:
+                        file_info = self.get_file_info(file_path)
+                        folder_info[file]["last_edited"] = file_info["last_edited"]
+                    except:
+                        continue
 
-            if os.path.isdir(file_path):
-                folder_info[file] = self.folder_json(file_path)
+        else:
+            folder_info = {}
+            for file in files:
+                if file.endswith(".json"):
+                    continue
+                file_path = os.path.join(folder_path, file)
 
-            else:
-                folder_info[file] = self.get_file_info(file_path)
+                if os.path.isdir(file_path):
+                    folder_info[file] = self.folder_json(file_path)
+
+                else:
+                    folder_info[file] = self.get_file_info(file_path)
 
         json_string = json.dumps(folder_info, indent=4)
 
@@ -402,6 +443,25 @@ class FileManager(ctk.CTkToplevel):
         zip_size = os.path.getsize(zip_path)
         send_file(zip_file_name, zip_path, ip, zip_size, 44332)
         os.remove(zip_path)
+        with open(os.path.join(self.path, "shared_folders.json"), 'r') as f:
+            data = json.load(f)
+        data.append(folder_name)
+        f.close()
+        with open(os.path.join(self.path, "shared_folders.json"), 'w') as f:
+             json.dump(data, f)
+
+    def load_shared_folders(self):
+        shared_f_json = "shared_folders.json"
+        shared_f_j_path = os.path.join(self.path, shared_f_json)
+        try:
+            with open(shared_f_j_path, 'w') as f:
+                self.shared_folders = json.load(f)
+
+        except:
+            data = []
+            with open(shared_f_j_path, 'w') as f:
+                json.dump(data, f)
+            f.close()
 
     def send_files(self):
         dest_user = self.user_list.users_radiobutton.get_checked_item()

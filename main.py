@@ -1,3 +1,4 @@
+import os
 from os import path, makedirs
 import customtkinter as ctk
 from file_manager import FileManager
@@ -20,6 +21,7 @@ class DropBag(ctk.CTk):
         self.path = path.join(self.path, dir_name)
         if not path.exists(self.path):
             makedirs(self.path)
+
 
 
 
