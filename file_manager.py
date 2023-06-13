@@ -10,6 +10,7 @@ import json
 import hashlib
 import zipfile
 import filecmp
+import re
 
 
 def save_to_json(json_name, json_string):
@@ -24,6 +25,7 @@ def zip_dir(dir_path, output_path):
                 file_path = os.path.join(root, file)
                 arcname = os.path.relpath(file_path, dir_path)
                 zipf.write(file_path, arcname)
+
 
 def unzip_file(zip_path, output_dir):
     with zipfile.ZipFile(zip_path, 'r') as zipf:
@@ -45,7 +47,6 @@ class FileManager(ctk.CTkToplevel):
         self.users = {}
         self.shared_folders = []
         self.load_shared_folders()
-
 
         self.file_list = FileList(self, self.path)
         self.user_list = UserList(self, self.users)
@@ -75,6 +76,8 @@ class FileManager(ctk.CTkToplevel):
 
         self.file_receiver_thread = threading.Thread(target=self.file_receiver)
         self.file_receiver_thread.start()
+
+        self.auto_sync_thread = threading.Thread(target=self.auto_sync_folders)
 
     def listen_for_broadcasts(self):
         listen_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -265,8 +268,6 @@ class FileManager(ctk.CTkToplevel):
                     self.compare_folders(current_folder_path, dir_path)
                     print("passou")
 
-
-
                     ## os.remove(dir_path) ainda n da pra remover (da acesso negado)
 
             except socket.timeout:
@@ -295,7 +296,9 @@ class FileManager(ctk.CTkToplevel):
                 print(current_folder_path)
                 shutil.copy2(file_path, current_folder_path)
         shutil.rmtree(new_folder_path)
-
+        json_string = json.dumps(data, indent=4)
+        save_to_json(folder_json, json_string)
+        f.close()
 
     def check_last_edited(self):
         files = os.listdir(self.path)
@@ -364,13 +367,19 @@ class FileManager(ctk.CTkToplevel):
                 file_path = os.path.join(folder_path, file)
                 if os.path.isdir(file_path):
                     pass
-                    #n vamos considerar folder com folders ent n vou usar
+                    # n vamos considerar folder com folders ent n vou usar
                 else:
-                    try:
-                        file_info = self.get_file_info(file_path)
-                        folder_info[file]["last_edited"] = file_info["last_edited"]
-                    except:
+                    regex = r'^(.*?)_\d{4}-\d{1,2}-\d{1,2}_\d{1,2}-\d{1,2}-\d{1,2}\.\w+$'
+                    regex2 = r'^(.*?)_\d{4}-\d{1,2}-\d{1,2}_\d{1,2}-\d{1,2}-\d{1,2}'
+                    if re.match(regex, file) or re.match(regex2, file):
                         continue
+                    file_info = self.get_file_info(file_path)
+                    if file in folder_info:
+                        folder_info[file]["last_edited"] = file_info["last_edited"]
+                    else:
+                        folder_info[file] = self.get_file_info(file_path)
+
+
 
         else:
             folder_info = {}
@@ -448,7 +457,7 @@ class FileManager(ctk.CTkToplevel):
         data.append(folder_name)
         f.close()
         with open(os.path.join(self.path, "shared_folders.json"), 'w') as f:
-             json.dump(data, f)
+            json.dump(data, f)
 
     def load_shared_folders(self):
         shared_f_json = "shared_folders.json"
@@ -513,7 +522,6 @@ class FileManager(ctk.CTkToplevel):
                 is_zip = True
                 print('zip')
 
-                
             file_size = int(file_size)
             file_path = os.path.join(self.path, file_name)
 
